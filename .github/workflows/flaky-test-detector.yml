@@ -43,7 +43,7 @@ jobs:
           python-version: '3.x'
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests xml.etree.ElementTree
 
       - name: Fetch previous workflow runs
         id: fetch-runs
@@ -63,18 +63,15 @@ jobs:
           response = requests.get(url, headers=headers)
           response.raise_for_status()
           runs = response.json()["workflow_runs"]
-
-          # Filter runs by workflow name
           runs = [run for run in runs if run["name"] == "$WORKFLOW_NAME"]
           run_ids = [run["id"] for run in runs]
-
           print(f"Found {len(run_ids)} runs for workflow '$WORKFLOW_NAME'")
           with open("run_ids.txt", "w") as f:
               json.dump(run_ids, f)
           EOF
 
-      - name: Fetch test results from runs
-        id: fetch-results
+      - name: Fetch and parse test artifacts
+        id: process-results
         env:
           GITHUB_TOKEN: ${{ secrets.github-token }}
           REPO: ${{ inputs.repository }}
@@ -82,7 +79,9 @@ jobs:
           python - <<EOF
           import requests
           import json
-          import re
+          import xml.etree.ElementTree as ET
+          import zipfile
+          import os
 
           headers = {"Authorization": f"Bearer $GITHUB_TOKEN", "Accept": "application/vnd.github.v3+json"}
           with open("run_ids.txt") as f:
@@ -90,29 +89,30 @@ jobs:
 
           test_results = {}
           for run_id in run_ids:
-              # Fetch job logs
-              url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}/jobs"
+              url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}/artifacts"
               response = requests.get(url, headers=headers)
               response.raise_for_status()
-              jobs = response.json()["jobs"]
+              artifacts = response.json()["artifacts"]
+              for artifact in artifacts:
+                  if artifact["name"] == "test-reports":
+                      zip_url = artifact["archive_download_url"]
+                      zip_response = requests.get(zip_url, headers=headers)
+                      zip_response.raise_for_status()
+                      with open("artifacts.zip", "wb") as f:
+                          f.write(zip_response.content)
+                      with zipfile.ZipFile("artifacts.zip", "r") as zip_ref:
+                          zip_ref.extractall("artifacts")
+                      for file in os.listdir("artifacts"):
+                          if file.endswith(".xml"):
+                              tree = ET.parse(f"artifacts/{file}")
+                              root = tree.getroot()
+                              for testcase in root.findall(".//testcase"):
+                                  name = testcase.get("name")
+                                  if testcase.find("failure") is not None:
+                                      test_results.setdefault(name, {"pass": 0, "fail": 0})["fail"] += 1
+                                  else:
+                                      test_results.setdefault(name, {"pass": 0, "fail": 0})["pass"] += 1
 
-              for job in jobs:
-                  logs_url = job["logs_url"]
-                  if logs_url:
-                      log_response = requests.get(logs_url, headers=headers)
-                      log_response.raise_for_status()
-                      logs = log_response.text
-                      # Parse logs for test failures (adjust regex for your test framework)
-                      for line in logs.splitlines():
-                          match = re.search(r'^.*✕.*\((.*)\)', line)  # Example for Jest
-                          if match:
-                              test_name = match.group(1).strip()
-                              test_results.setdefault(test_name, {"pass": 0, "fail": 0})["fail"] += 1
-                          elif re.search(r'^.*✓.*\((.*)\)', line):  # Example for Jest pass
-                              test_name = match.group(1).strip()
-                              test_results.setdefault(test_name, {"pass": 0, "fail": 0})["pass"] += 1
-
-          # Identify flaky tests (failed and passed in different runs)
           flaky_tests = {k: v["fail"] for k, v in test_results.items() if v["pass"] > 0 and v["fail"] > 0}
           with open("flaky-tests.json", "w") as f:
               json.dump(flaky_tests, f)
@@ -121,13 +121,12 @@ jobs:
           EOF
 
       - name: Summarize results
-        id: summarize
         run: |
           echo "Flaky Test Summary:"
           jq -r 'to_entries | .[] | "- \(.key): failed \(.value) out of ${{ inputs.runs-limit }} runs"' flaky-tests.json > flaky-tests-summary.txt
           cat flaky-tests-summary.txt
         env:
-          FLAKY_TESTS: ${{ steps.fetch-results.outputs.flaky-tests }}
+          FLAKY_TESTS: ${{ steps.process-results.outputs.flaky-tests }}
 
       - name: Upload flaky test summary
         uses: actions/upload-artifact@v4
