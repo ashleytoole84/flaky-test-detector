@@ -64,14 +64,16 @@ jobs:
 
           headers = {"Authorization": f"Bearer $GITHUB_TOKEN", "Accept": "application/vnd.github.v3+json"}
           url = f"https://api.github.com/repos/$REPO/actions/runs?per_page=$RUNS_LIMIT&branch=$BRANCH"
+          print(f"Fetching runs from: {url}")
           response = requests.get(url, headers=headers)
           if response.status_code != 200:
               print(f"Error fetching runs: {response.status_code} {response.text}")
               exit(1)
           runs = response.json()["workflow_runs"]
+          print(f"Total runs found: {len(runs)}")
           runs = [run for run in runs if run["name"] == "$WORKFLOW_NAME"]
           run_ids = [run["id"] for run in runs]
-          print(f"Found {len(run_ids)} runs for workflow '$WORKFLOW_NAME': {run_ids}")
+          print(f"Filtered {len(run_ids)} runs for workflow '$WORKFLOW_NAME': {run_ids}")
           with open("run_ids.txt", "w") as f:
               json.dump(run_ids, f)
           EOF
@@ -88,24 +90,29 @@ jobs:
           import xml.etree.ElementTree as ET
           import zipfile
           import os
+          import glob
 
           headers = {"Authorization": f"Bearer $GITHUB_TOKEN", "Accept": "application/vnd.github.v3+json"}
           with open("run_ids.txt") as f:
               run_ids = json.load(f)
+          if not run_ids:
+              print("No run IDs found. Check workflow name and branch.")
+              print(f"all-tests={{}}", file=open("$GITHUB_OUTPUT", "a"))
+              print(f"flaky-tests={{}}", file=open("$GITHUB_OUTPUT", "a"))
+              exit(0)
 
           test_results = {}
           for run_id in run_ids:
               print(f"Processing run ID: {run_id}")
-              # Fetch run details to get number of attempts
               run_url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}"
               run_response = requests.get(run_url, headers=headers)
               if run_response.status_code != 200:
                   print(f"Error fetching run {run_id}: {run_response.status_code} {run_response.text}")
                   continue
-              run_attempts = run_response.json().get("run_attempt", 1)
+              run_data = run_response.json()
+              run_attempts = run_data.get("run_attempt", 1)
               print(f"Run {run_id} has {run_attempts} attempt(s)")
 
-              # Process each attempt
               for attempt in range(1, run_attempts + 1):
                   print(f"Processing attempt {attempt} for run {run_id}")
                   url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}/attempts/{attempt}/artifacts"
@@ -127,34 +134,44 @@ jobs:
                               f.write(zip_response.content)
                           with zipfile.ZipFile(f"artifacts-run-{run_id}-attempt-{attempt}.zip", "r") as zip_ref:
                               zip_ref.extractall(f"artifacts/run-{run_id}-attempt-{attempt}")
-                          extracted_files = os.listdir(f"artifacts/run-{run_id}-attempt-{attempt}")
-                          print(f"Extracted files for run {run_id}, attempt {attempt}: {extracted_files}")
-                          for file in extracted_files:
-                              if file.endswith(".xml"):
-                                  file_path = f"artifacts/run-{run_id}-attempt-{attempt}/{file}"
-                                  print(f"Parsing XML file: {file_path}")
-                                  try:
-                                      tree = ET.parse(file_path)
-                                      root = tree.getroot()
-                                      for testcase in root.findall(".//testcase"):
-                                          name = testcase.get("name")
-                                          classname = testcase.get("classname", "")
-                                          full_name = f"{classname}.{name}" if classname else name
-                                          if not full_name:
-                                              print(f"Warning: Testcase without name/classname in {file_path}")
-                                              continue
-                                          if testcase.find("failure") is not None or testcase.find("error") is not None:
-                                              test_results.setdefault(full_name, {"pass": 0, "fail": 0})["fail"] += 1
-                                              print(f"Test {full_name} failed in {file_path}")
-                                          else:
-                                              test_results.setdefault(full_name, {"pass": 0, "fail": 0})["pass"] += 1
-                                              print(f"Test {full_name} passed in {file_path}")
-                                  except ET.ParseError as e:
-                                      print(f"Error parsing XML file {file_path}: {e}")
+                          # List all files in artifact
+                          all_files = []
+                          for root, _, files in os.walk(f"artifacts/run-{run_id}-attempt-{attempt}"):
+                              for f in files:
+                                  all_files.append(os.path.join(root, f))
+                          print(f"All files in artifact for run {run_id}, attempt {attempt}: {all_files}")
+                          # Find TEST-*.xml files
+                          xml_files = glob.glob(f"artifacts/run-{run_id}-attempt-{attempt}/**/TEST-*.xml", recursive=True)
+                          print(f"Found {len(xml_files)} XML files for run {run_id}, attempt {attempt}: {xml_files}")
+                          for file_path in xml_files:
+                              print(f"Parsing XML file: {file_path}")
+                              try:
+                                  tree = ET.parse(file_path)
+                                  root = tree.getroot()
+                                  print(f"XML root tag: {root.tag}, attributes: {root.attrib}")
+                                  for testcase in root.findall(".//testcase"):
+                                      name = testcase.get("name")
+                                      classname = testcase.get("classname", "")
+                                      full_name = f"{classname}.{name}" if classname else name
+                                      if not full_name:
+                                          print(f"Warning: Testcase without name/classname in {file_path}")
+                                          continue
+                                      if testcase.find("failure") is not None or testcase.find("error") is not None:
+                                          test_results.setdefault(full_name, {"pass": 0, "fail": 0})["fail"] += 1
+                                          print(f"Test {full_name} failed in {file_path}")
+                                      else:
+                                          test_results.setdefault(full_name, {"pass": 0, "fail": 0})["pass"] += 1
+                                          print(f"Test {full_name} passed in {file_path}")
+                              except ET.ParseError as e:
+                                  print(f"Error parsing XML file {file_path}: {e}")
+                                  continue
 
           print("All test results:")
-          for test, counts in test_results.items():
-              print(f"- {test}: {counts['pass']} passes, {counts['fail']} failures")
+          if test_results:
+              for test, counts in test_results.items():
+                  print(f"- {test}: {counts['pass']} passes, {counts['fail']} failures")
+          else:
+              print("No test results parsed.")
           flaky_tests = {k: v["fail"] for k, v in test_results.items() if v["pass"] > 0 and v["fail"] > 0}
           print("Flaky tests:")
           if flaky_tests:
