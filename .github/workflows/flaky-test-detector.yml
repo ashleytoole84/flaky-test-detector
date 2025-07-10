@@ -96,48 +96,61 @@ jobs:
           test_results = {}
           for run_id in run_ids:
               print(f"Processing run ID: {run_id}")
-              url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}/artifacts"
-              response = requests.get(url, headers=headers)
-              if response.status_code != 200:
-                  print(f"Error fetching artifacts for run {run_id}: {response.status_code} {response.text}")
+              # Fetch run details to get number of attempts
+              run_url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}"
+              run_response = requests.get(run_url, headers=headers)
+              if run_response.status_code != 200:
+                  print(f"Error fetching run {run_id}: {run_response.status_code} {run_response.text}")
                   continue
-              artifacts = response.json()["artifacts"]
-              print(f"Found {len(artifacts)} artifacts for run {run_id}: {[a['name'] for a in artifacts]}")
-              for artifact in artifacts:
-                  if artifact["name"] == "test-results":
-                      zip_url = artifact["archive_download_url"]
-                      print(f"Downloading artifact from {zip_url}")
-                      zip_response = requests.get(zip_url, headers=headers)
-                      if zip_response.status_code != 200:
-                          print(f"Error downloading artifact {zip_url}: {zip_response.status_code} {zip_response.text}")
-                          continue
-                      with open("artifacts.zip", "wb") as f:
-                          f.write(zip_response.content)
-                      with zipfile.ZipFile("artifacts.zip", "r") as zip_ref:
-                          zip_ref.extractall("artifacts")
-                      extracted_files = os.listdir("artifacts")
-                      print(f"Extracted files: {extracted_files}")
-                      for file in extracted_files:
-                          if file.endswith(".xml"):
-                              print(f"Parsing XML file: {file}")
-                              try:
-                                  tree = ET.parse(f"artifacts/{file}")
-                                  root = tree.getroot()
-                                  for testcase in root.findall(".//testcase"):
-                                      name = testcase.get("name")
-                                      classname = testcase.get("classname", "")
-                                      full_name = f"{classname}.{name}" if classname else name
-                                      if not full_name:
-                                          print(f"Warning: Testcase without name/classname in {file}")
-                                          continue
-                                      if testcase.find("failure") is not None or testcase.find("error") is not None:
-                                          test_results.setdefault(full_name, {"pass": 0, "fail": 0})["fail"] += 1
-                                          print(f"Test {full_name} failed in {file}")
-                                      else:
-                                          test_results.setdefault(full_name, {"pass": 0, "fail": 0})["pass"] += 1
-                                          print(f"Test {full_name} passed in {file}")
-                              except ET.ParseError as e:
-                                  print(f"Error parsing XML file {file}: {e}")
+              run_attempts = run_response.json().get("run_attempt", 1)
+              print(f"Run {run_id} has {run_attempts} attempt(s)")
+
+              # Process each attempt
+              for attempt in range(1, run_attempts + 1):
+                  print(f"Processing attempt {attempt} for run {run_id}")
+                  url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}/attempts/{attempt}/artifacts"
+                  response = requests.get(url, headers=headers)
+                  if response.status_code != 200:
+                      print(f"Error fetching artifacts for run {run_id}, attempt {attempt}: {response.status_code} {response.text}")
+                      continue
+                  artifacts = response.json()["artifacts"]
+                  print(f"Found {len(artifacts)} artifacts for run {run_id}, attempt {attempt}: {[a['name'] for a in artifacts]}")
+                  for artifact in artifacts:
+                      if artifact["name"] == "test-results":
+                          zip_url = artifact["archive_download_url"]
+                          print(f"Downloading artifact from {zip_url}")
+                          zip_response = requests.get(zip_url, headers=headers)
+                          if zip_response.status_code != 200:
+                              print(f"Error downloading artifact {zip_url}: {zip_response.status_code} {zip_response.text}")
+                              continue
+                          with open(f"artifacts-run-{run_id}-attempt-{attempt}.zip", "wb") as f:
+                              f.write(zip_response.content)
+                          with zipfile.ZipFile(f"artifacts-run-{run_id}-attempt-{attempt}.zip", "r") as zip_ref:
+                              zip_ref.extractall(f"artifacts/run-{run_id}-attempt-{attempt}")
+                          extracted_files = os.listdir(f"artifacts/run-{run_id}-attempt-{attempt}")
+                          print(f"Extracted files for run {run_id}, attempt {attempt}: {extracted_files}")
+                          for file in extracted_files:
+                              if file.endswith(".xml"):
+                                  file_path = f"artifacts/run-{run_id}-attempt-{attempt}/{file}"
+                                  print(f"Parsing XML file: {file_path}")
+                                  try:
+                                      tree = ET.parse(file_path)
+                                      root = tree.getroot()
+                                      for testcase in root.findall(".//testcase"):
+                                          name = testcase.get("name")
+                                          classname = testcase.get("classname", "")
+                                          full_name = f"{classname}.{name}" if classname else name
+                                          if not full_name:
+                                              print(f"Warning: Testcase without name/classname in {file_path}")
+                                              continue
+                                          if testcase.find("failure") is not None or testcase.find("error") is not None:
+                                              test_results.setdefault(full_name, {"pass": 0, "fail": 0})["fail"] += 1
+                                              print(f"Test {full_name} failed in {file_path}")
+                                          else:
+                                              test_results.setdefault(full_name, {"pass": 0, "fail": 0})["pass"] += 1
+                                              print(f"Test {full_name} passed in {file_path}")
+                                  except ET.ParseError as e:
+                                      print(f"Error parsing XML file {file_path}: {e}")
 
           print("All test results:")
           for test, counts in test_results.items():
