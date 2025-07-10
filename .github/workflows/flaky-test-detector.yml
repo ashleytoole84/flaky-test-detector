@@ -179,13 +179,9 @@ jobs:
                   print(f"- {test}: failed {fails} out of {test_results[test]['pass'] + test_results[test]['fail']} runs")
           else:
               print("No flaky tests detected.")
-          with open("flaky-tests.json", "w") as f:
-              json.dump(flaky_tests, f)
-          with open("all-tests.json", "w") as f:
-              json.dump(test_results, f)
-          # Ensure valid JSON output
-          flaky_tests_json = json.dumps(flaky_tests)
-          all_tests_json = json.dumps(test_results)
+          # Ensure valid JSON output with explicit serialization
+          flaky_tests_json = json.dumps(flaky_tests, ensure_ascii=False)
+          all_tests_json = json.dumps(test_results, ensure_ascii=False)
           print(f"flaky-tests={flaky_tests_json}", file=open("$GITHUB_OUTPUT", "a"))
           print(f"all-tests={all_tests_json}", file=open("$GITHUB_OUTPUT", "a"))
           EOF
