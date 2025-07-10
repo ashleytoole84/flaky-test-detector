@@ -26,13 +26,17 @@ on:
     outputs:
       flaky-tests:
         description: 'JSON string of flaky tests and their failure counts'
-        value: ${{ jobs.detect-flaky-tests.outputs.flaky-tests }}
+        value: ${{ steps.process-results.outputs.flaky-tests }}
+      all-tests:
+        description: 'JSON string of all test results (pass/fail counts)'
+        value: ${{ steps.process-results.outputs.all-tests }}
 
 jobs:
   detect-flaky-tests:
     runs-on: ubuntu-latest
     outputs:
       flaky-tests: ${{ steps.process-results.outputs.flaky-tests }}
+      all-tests: ${{ steps.process-results.outputs.all-tests }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -61,11 +65,13 @@ jobs:
           headers = {"Authorization": f"Bearer $GITHUB_TOKEN", "Accept": "application/vnd.github.v3+json"}
           url = f"https://api.github.com/repos/$REPO/actions/runs?per_page=$RUNS_LIMIT&branch=$BRANCH"
           response = requests.get(url, headers=headers)
-          response.raise_for_status()
+          if response.status_code != 200:
+              print(f"Error fetching runs: {response.status_code} {response.text}")
+              exit(1)
           runs = response.json()["workflow_runs"]
           runs = [run for run in runs if run["name"] == "$WORKFLOW_NAME"]
           run_ids = [run["id"] for run in runs]
-          print(f"Found {len(run_ids)} runs for workflow '$WORKFLOW_NAME'")
+          print(f"Found {len(run_ids)} runs for workflow '$WORKFLOW_NAME': {run_ids}")
           with open("run_ids.txt", "w") as f:
               json.dump(run_ids, f)
           EOF
@@ -89,52 +95,64 @@ jobs:
 
           test_results = {}
           for run_id in run_ids:
+              print(f"Processing run ID: {run_id}")
               url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}/artifacts"
               response = requests.get(url, headers=headers)
-              response.raise_for_status()
+              if response.status_code != 200:
+                  print(f"Error fetching artifacts for run {run_id}: {response.status_code} {response.text}")
+                  continue
               artifacts = response.json()["artifacts"]
+              print(f"Found {len(artifacts)} artifacts for run {run_id}: {[a['name'] for a in artifacts]}")
               for artifact in artifacts:
-                  if artifact["name"] == "test-reports":
+                  if artifact["name"] == "test-results":
                       zip_url = artifact["archive_download_url"]
+                      print(f"Downloading artifact from {zip_url}")
                       zip_response = requests.get(zip_url, headers=headers)
-                      zip_response.raise_for_status()
+                      if zip_response.status_code != 200:
+                          print(f"Error downloading artifact {zip_url}: {zip_response.status_code} {zip_response.text}")
+                          continue
                       with open("artifacts.zip", "wb") as f:
                           f.write(zip_response.content)
                       with zipfile.ZipFile("artifacts.zip", "r") as zip_ref:
                           zip_ref.extractall("artifacts")
-                      for file in os.listdir("artifacts"):
+                      extracted_files = os.listdir("artifacts")
+                      print(f"Extracted files: {extracted_files}")
+                      for file in extracted_files:
                           if file.endswith(".xml"):
-                              tree = ET.parse(f"artifacts/{file}")
-                              root = tree.getroot()
-                              for testcase in root.findall(".//testcase"):
-                                  name = testcase.get("name")
-                                  if testcase.find("failure") is not None:
-                                      test_results.setdefault(name, {"pass": 0, "fail": 0})["fail"] += 1
-                                  else:
-                                      test_results.setdefault(name, {"pass": 0, "fail": 0})["pass"] += 1
+                              print(f"Parsing XML file: {file}")
+                              try:
+                                  tree = ET.parse(f"artifacts/{file}")
+                                  root = tree.getroot()
+                                  for testcase in root.findall(".//testcase"):
+                                      name = testcase.get("name")
+                                      classname = testcase.get("classname", "")
+                                      full_name = f"{classname}.{name}" if classname else name
+                                      if not full_name:
+                                          print(f"Warning: Testcase without name/classname in {file}")
+                                          continue
+                                      if testcase.find("failure") is not None or testcase.find("error") is not None:
+                                          test_results.setdefault(full_name, {"pass": 0, "fail": 0})["fail"] += 1
+                                          print(f"Test {full_name} failed in {file}")
+                                      else:
+                                          test_results.setdefault(full_name, {"pass": 0, "fail": 0})["pass"] += 1
+                                          print(f"Test {full_name} passed in {file}")
+                              except ET.ParseError as e:
+                                  print(f"Error parsing XML file {file}: {e}")
 
+          print("All test results:")
+          for test, counts in test_results.items():
+              print(f"- {test}: {counts['pass']} passes, {counts['fail']} failures")
           flaky_tests = {k: v["fail"] for k, v in test_results.items() if v["pass"] > 0 and v["fail"] > 0}
+          print("Flaky tests:")
+          if flaky_tests:
+              for test, fails in flaky_tests.items():
+                  print(f"- {test}: failed {fails} out of {test_results[test]['pass'] + test_results[test]['fail']} runs")
+          else:
+              print("No flaky tests detected.")
           with open("flaky-tests.json", "w") as f:
               json.dump(flaky_tests, f)
-          print(f"Flaky tests: {json.dumps(flaky_tests)}")
+          with open("all-tests.json", "w") as f:
+              json.dump(test_results, f)
           print(f"flaky-tests={json.dumps(flaky_tests)}", file=open("$GITHUB_OUTPUT", "a"))
+          print(f"all-tests={json.dumps(test_results)}", file=open("$GITHUB_OUTPUT", "a"))
           EOF
-
-      - name: Summarize results
-        run: |
-          echo "Flaky Test Summary:"
-          jq -r 'to_entries | .[] | "- \(.key): failed \(.value) out of ${{ inputs.runs-limit }} runs"' flaky-tests.json > flaky-tests-summary.txt
-          cat flaky-tests-summary.txt
-        env:
-          FLAKY_TESTS: ${{ steps.process-results.outputs.flaky-tests }}
-
-      - name: Upload flaky test summary
-        uses: actions/upload-artifact@v4
-        with:
-          name: flaky-tests-summary
-          path: flaky-tests-summary.txt
-
-
-
-
-
