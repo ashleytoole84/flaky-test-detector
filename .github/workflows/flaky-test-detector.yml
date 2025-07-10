@@ -183,6 +183,6 @@ jobs:
               json.dump(flaky_tests, f)
           with open("all-tests.json", "w") as f:
               json.dump(test_results, f)
-          print(f"flaky-tests={json.dumps(flaky-tests)}", file=open("$GITHUB_OUTPUT", "a"))
-          print(f"all-tests={json.dumps(test-results)}", file=open("$GITHUB_OUTPUT", "a"))
+          print(f"flaky-tests={json.dumps(flaky_tests)}", file=open("$GITHUB_OUTPUT", "a"))
+          print(f"all-tests={json.dumps(test_results)}", file=open("$GITHUB_OUTPUT", "a")) 
           EOF
