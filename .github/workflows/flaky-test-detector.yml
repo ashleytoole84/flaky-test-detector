@@ -26,10 +26,10 @@ on:
     outputs:
       flaky-tests:
         description: 'JSON string of flaky tests and their failure counts'
-        value: ${{ steps.process-results.outputs.flaky-tests }}
+        value: ${{ jobs.process-results.outputs.flaky-tests }}
       all-tests:
         description: 'JSON string of all test results (pass/fail counts)'
-        value: ${{ steps.process-results.outputs.all-tests }}
+        value: ${{ jobs.process-results.outputs.all-tests }}
 
 jobs:
   detect-flaky-tests:
