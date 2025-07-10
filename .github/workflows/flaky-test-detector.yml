@@ -43,7 +43,7 @@ jobs:
           python-version: '3.x'
 
       - name: Install dependencies
-        run: pip install requests xml.etree.ElementTree
+        run: pip install requests
 
       - name: Fetch previous workflow runs
         id: fetch-runs
@@ -133,3 +133,8 @@ jobs:
         with:
           name: flaky-tests-summary
           path: flaky-tests-summary.txt
+
+
+
+
+
