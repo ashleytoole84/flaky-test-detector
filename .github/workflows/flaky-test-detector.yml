@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       repository:
-        description: 'Repository to analyze (e.g., <org-name>/platform-engineer-tech-case-49378219)'
+        description: 'Repository to analyze (e.g., <org-name>/<repo>)'
         required: true
         type: string
       workflow-name:
@@ -71,6 +71,7 @@ jobs:
               exit(1)
           runs = response.json()["workflow_runs"]
           print(f"Total runs found: {len(runs)}")
+          print("All run names:", [run["name"] for run in runs])
           runs = [run for run in runs if run["name"] == "$WORKFLOW_NAME"]
           run_ids = [run["id"] for run in runs]
           print(f"Filtered {len(run_ids)} runs for workflow '$WORKFLOW_NAME': {run_ids}")
@@ -111,16 +112,17 @@ jobs:
                   continue
               run_data = run_response.json()
               run_attempts = run_data.get("run_attempt", 1)
-              print(f"Run {run_id} has {run_attempts} attempt(s)")
+              print(f"Run {run_id} has {run_attempts} attempt(s) reported, will fetch artifacts for each")
 
+              # Fetch artifacts for each attempt
               for attempt in range(1, run_attempts + 1):
                   print(f"Processing attempt {attempt} for run {run_id}")
-                  url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}/attempts/{attempt}/artifacts"
-                  response = requests.get(url, headers=headers)
-                  if response.status_code != 200:
-                      print(f"Error fetching artifacts for run {run_id}, attempt {attempt}: {response.status_code} {response.text}")
+                  artifacts_url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}/artifacts"
+                  artifacts_response = requests.get(artifacts_url, headers=headers)
+                  if artifacts_response.status_code != 200:
+                      print(f"Error fetching artifacts for run {run_id}, attempt {attempt}: {artifacts_response.status_code} {artifacts_response.text}")
                       continue
-                  artifacts = response.json()["artifacts"]
+                  artifacts = artifacts_response.json()["artifacts"]
                   print(f"Found {len(artifacts)} artifacts for run {run_id}, attempt {attempt}: {[a['name'] for a in artifacts]}")
                   for artifact in artifacts:
                       if artifact["name"] == "test-results":
@@ -134,13 +136,11 @@ jobs:
                               f.write(zip_response.content)
                           with zipfile.ZipFile(f"artifacts-run-{run_id}-attempt-{attempt}.zip", "r") as zip_ref:
                               zip_ref.extractall(f"artifacts/run-{run_id}-attempt-{attempt}")
-                          # List all files in artifact
                           all_files = []
                           for root, _, files in os.walk(f"artifacts/run-{run_id}-attempt-{attempt}"):
                               for f in files:
                                   all_files.append(os.path.join(root, f))
                           print(f"All files in artifact for run {run_id}, attempt {attempt}: {all_files}")
-                          # Find TEST-*.xml files
                           xml_files = glob.glob(f"artifacts/run-{run_id}-attempt-{attempt}/**/TEST-*.xml", recursive=True)
                           print(f"Found {len(xml_files)} XML files for run {run_id}, attempt {attempt}: {xml_files}")
                           for file_path in xml_files:
@@ -183,6 +183,6 @@ jobs:
               json.dump(flaky_tests, f)
           with open("all-tests.json", "w") as f:
               json.dump(test_results, f)
-          print(f"flaky-tests={json.dumps(flaky_tests)}", file=open("$GITHUB_OUTPUT", "a"))
-          print(f"all-tests={json.dumps(test_results)}", file=open("$GITHUB_OUTPUT", "a"))
+          print(f"flaky-tests={json.dumps(flaky-tests)}", file=open("$GITHUB_OUTPUT", "a"))
+          print(f"all-tests={json.dumps(test-results)}", file=open("$GITHUB_OUTPUT", "a"))
           EOF
