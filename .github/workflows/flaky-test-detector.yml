@@ -114,7 +114,7 @@ jobs:
               run_attempts = run_data.get("run_attempt", 1)
               print(f"Run {run_id} has {run_attempts} attempt(s) reported, will fetch artifacts for each")
 
-              # Fetch artifacts for each attempt
+
               for attempt in range(1, run_attempts + 1):
                   print(f"Processing attempt {attempt} for run {run_id}")
                   artifacts_url = f"https://api.github.com/repos/$REPO/actions/runs/{run_id}/artifacts"
@@ -179,7 +179,7 @@ jobs:
                   print(f"- {test}: failed {fails} out of {test_results[test]['pass'] + test_results[test]['fail']} runs")
           else:
               print("No flaky tests detected.")
-          # Ensure valid JSON output with explicit serialization
+
           flaky_tests_json = json.dumps(flaky_tests, ensure_ascii=False)
           all_tests_json = json.dumps(test_results, ensure_ascii=False)
           print(f"flaky-tests={flaky_tests_json}", file=open("$GITHUB_OUTPUT", "a"))
